@@ -209,6 +209,56 @@ async function writeAndPushLog(entry: { user: string; channel: string; thread: s
   }
 }
 
+// ───────────────── Slack thread context ─────────────────
+
+interface SlackMessage {
+  ts?: string;
+  user?: string;
+  bot_id?: string;
+  username?: string;
+  bot_profile?: { name?: string };
+  text?: string;
+  subtype?: string;
+}
+
+async function fetchThreadContext(
+  client: { conversations: { replies: (args: { channel: string; ts: string; limit?: number }) => Promise<{ messages?: SlackMessage[] }> } },
+  channel: string,
+  threadTs: string,
+  currentTs: string,
+): Promise<string> {
+  try {
+    const res = await client.conversations.replies({ channel, ts: threadTs, limit: 200 });
+    const msgs = res.messages ?? [];
+    if (msgs.length === 0) return '';
+
+    const lines: string[] = [];
+    for (const m of msgs) {
+      if (m.ts === currentTs) continue;
+      if (m.subtype === 'bot_message' && m.text === '_작성 중..._') continue;
+      const speaker = m.bot_id
+        ? (m.username || m.bot_profile?.name || `bot:${m.bot_id}`)
+        : (m.user ? `<@${m.user}>` : 'unknown');
+      const text = (m.text ?? '').replace(/<@[A-Z0-9]+>\s*/g, '').trim();
+      if (!text || text === '_작성 중..._') continue;
+      lines.push(`[${speaker}] ${text}`);
+    }
+    if (lines.length === 0) return '';
+
+    return [
+      '<thread_history>',
+      '아래는 이 슬랙 스레드의 이전 대화입니다 (시간순). 사용자와 다른 에이전트(솜/랑/모)의 발언이 모두 포함되며, 그들과 자연스럽게 협업하세요.',
+      '',
+      lines.join('\n'),
+      '</thread_history>',
+      '',
+    ].join('\n');
+  } catch (err) {
+    console.warn(`thread context fetch failed: ${(err as Error).message}`);
+    return '';
+  }
+}
+
 // ───────────────── Slack handler ─────────────────
 
 const stripMention = (text: string) => text.replace(/<@[A-Z0-9]+>\s*/g, '').trim();
@@ -241,7 +291,11 @@ app.event('app_mention', async ({ event, client, logger }) => {
     } else {
       const sessions = await loadSessions();
       const existing = sessions[threadKey];
-      const { text, sessionId } = await runClaude(userText, existing);
+      const threadCtx = e.thread_ts
+        ? await fetchThreadContext(client, channel, threadKey, ts)
+        : '';
+      const prompt = threadCtx + `<user_request>\n${userText}\n</user_request>`;
+      const { text, sessionId } = await runClaude(prompt, existing);
       answer = text;
       if (sessionId) await saveSession(threadKey, sessionId);
     }
