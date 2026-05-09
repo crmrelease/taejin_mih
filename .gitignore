@@ -6,6 +6,9 @@
 # Per-instance local Claude config (personality, scratch notes) — NEVER commit
 CLAUDE.local.md
 
+# Per-instance bot state (Slack thread → Claude session map)
+bot/sessions.json
+
 # OS
 .DS_Store
 Thumbs.db
