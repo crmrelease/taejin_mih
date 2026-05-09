@@ -34,15 +34,6 @@ const app = new App({
 
 // ───────────────── Claude session continuity ─────────────────
 
-interface ClaudeJsonResult {
-  type?: string;
-  subtype?: string;
-  result?: string;
-  session_id?: string;
-  is_error?: boolean;
-  error?: string;
-}
-
 async function loadSessions(): Promise<Record<string, string>> {
   try { return JSON.parse(await fs.readFile(SESSIONS_FILE, 'utf8')); } catch { return {}; }
 }
@@ -54,34 +45,89 @@ async function saveSession(threadKey: string, sessionId: string): Promise<void> 
   await fs.writeFile(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
 }
 
-function runClaude(prompt: string, sessionId?: string): Promise<{ text: string; sessionId: string }> {
+interface ContentBlock {
+  type?: string;
+  text?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+}
+
+function describeActivity(block: ContentBlock): string | null {
+  if (block.type === 'text' && block.text) {
+    const firstLine = block.text.split('\n').find((l) => l.trim()) || '';
+    if (!firstLine) return null;
+    return `💭 ${firstLine.slice(0, 120)}`;
+  }
+  if (block.type === 'tool_use') {
+    const name = block.name || 'tool';
+    const input = (block.input ?? {}) as Record<string, string | undefined>;
+    const arg =
+      input.command ||
+      input.file_path ||
+      input.pattern ||
+      input.path ||
+      input.url ||
+      input.query ||
+      input.description ||
+      '';
+    const argShort = arg ? `: ${String(arg).slice(0, 80)}` : '';
+    return `🔧 ${name}${argShort}`;
+  }
+  return null;
+}
+
+function runClaude(
+  prompt: string,
+  sessionId?: string,
+  onActivity?: (s: string) => void,
+): Promise<{ text: string; sessionId: string }> {
   return new Promise((resolve, reject) => {
     const args = [
       '-p', prompt,
       '--add-dir', WORKSPACE_DIR,
       '--dangerously-skip-permissions',
-      '--output-format', 'json',
+      '--output-format', 'stream-json',
+      '--verbose',
     ];
     if (sessionId) args.push('--resume', sessionId);
 
     const proc = spawn('claude', args, { cwd: WORKSPACE_DIR });
-    let stdout = '';
+    let buf = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    let resultText = '';
+    let resultSessionId = '';
+    let errorMsg: string | null = null;
+
+    proc.stdout.on('data', (d) => {
+      buf += d.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const event = JSON.parse(trimmed);
+          if (event.type === 'result') {
+            if (event.is_error) errorMsg = event.error || 'Claude error';
+            if (typeof event.result === 'string') resultText = event.result;
+            if (typeof event.session_id === 'string') resultSessionId = event.session_id;
+          } else if (event.type === 'assistant' && event.message?.content) {
+            for (const block of event.message.content as ContentBlock[]) {
+              const desc = describeActivity(block);
+              if (desc && onActivity) onActivity(desc);
+            }
+          }
+        } catch {
+          // ignore non-JSON or partial lines
+        }
+      }
+    });
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
     proc.on('error', reject);
     proc.on('close', (code) => {
-      if (code !== 0) return reject(new Error(`claude exited ${code}\n${stderr || stdout}`));
-      try {
-        const parsed: ClaudeJsonResult = JSON.parse(stdout.trim());
-        if (parsed.is_error) return reject(new Error(parsed.error || 'Claude error'));
-        resolve({
-          text: parsed.result || '(빈 응답)',
-          sessionId: parsed.session_id || '',
-        });
-      } catch (err) {
-        reject(new Error(`parse failed: ${(err as Error).message}\n${stdout.slice(0, 500)}`));
-      }
+      if (code !== 0) return reject(new Error(`claude exited ${code}\n${stderr.slice(0, 500)}`));
+      if (errorMsg) return reject(new Error(errorMsg));
+      resolve({ text: resultText || '(빈 응답)', sessionId: resultSessionId });
     });
   });
 }
@@ -285,6 +331,7 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
   let thinkingTs: string | undefined;
   let eyesAdded = false;
+  let lastActivity = '';
   const progressTickers: Array<{ ts: string }> = [];
   const progressTimers: NodeJS.Timeout[] = [];
   const startedAt = Date.now();
@@ -293,10 +340,11 @@ app.event('app_mention', async ({ event, client, logger }) => {
     const timer = setTimeout(async () => {
       try {
         const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+        const activityLine = lastActivity ? `\n> ${lastActivity}` : '';
         const res = await client.chat.postMessage({
           channel,
           thread_ts: e.thread_ts || ts,
-          text: `_:hourglass_flowing_sand: 아직 작업 중입니다 (${elapsedSec}초 경과)._`,
+          text: `_:hourglass_flowing_sand: 작업 중 (${elapsedSec}초 경과)_${activityLine}`,
         });
         if (res.ts) progressTickers.push({ ts: res.ts });
       } catch (err) {
@@ -340,7 +388,9 @@ app.event('app_mention', async ({ event, client, logger }) => {
       const registry = await loadRegistry();
       const registryCtx = formatRegistryForPrompt(registry, AGENT_NAME);
       const prompt = registryCtx + threadCtx + `<user_request>\n${userText}\n</user_request>`;
-      const { text, sessionId } = await runClaude(prompt, existing);
+      const { text, sessionId } = await runClaude(prompt, existing, (act) => {
+        lastActivity = act;
+      });
       answer = text;
       if (sessionId) await saveSession(threadKey, sessionId);
     }
