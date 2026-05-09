@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Per-instance local Claude config (personality, scratch notes) — NEVER commit
+CLAUDE.local.md
+
 # OS
 .DS_Store
 Thumbs.db
