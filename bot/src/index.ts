@@ -273,6 +273,33 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
   let thinkingTs: string | undefined;
   let eyesAdded = false;
+  const progressTickers: Array<{ ts: string }> = [];
+  const progressTimers: NodeJS.Timeout[] = [];
+  const startedAt = Date.now();
+
+  const scheduleProgressTick = (delayMs: number) => {
+    const timer = setTimeout(async () => {
+      try {
+        const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+        const res = await client.chat.postMessage({
+          channel,
+          thread_ts: e.thread_ts || ts,
+          text: `_:hourglass_flowing_sand: 아직 작업 중입니다 (${elapsedSec}초 경과)._`,
+        });
+        if (res.ts) progressTickers.push({ ts: res.ts });
+      } catch (err) {
+        logger.warn(`progress push failed: ${(err as Error).message}`);
+      }
+    }, delayMs);
+    progressTimers.push(timer);
+  };
+
+  const cleanupProgress = async () => {
+    for (const t of progressTimers) clearTimeout(t);
+    for (const tick of progressTickers) {
+      await client.chat.delete({ channel, ts: tick.ts }).catch(() => {});
+    }
+  };
 
   try {
     await client.reactions.add({ channel, timestamp: ts, name: 'eyes' });
@@ -284,6 +311,10 @@ app.event('app_mention', async ({ event, client, logger }) => {
       text: '_작성 중..._',
     });
     thinkingTs = thinking.ts;
+
+    scheduleProgressTick(60_000);
+    scheduleProgressTick(180_000);
+    scheduleProgressTick(420_000);
 
     let answer: string;
     if (!userText) {
@@ -299,6 +330,8 @@ app.event('app_mention', async ({ event, client, logger }) => {
       answer = text;
       if (sessionId) await saveSession(threadKey, sessionId);
     }
+
+    await cleanupProgress();
 
     await client.chat.update({
       channel,
@@ -322,6 +355,7 @@ app.event('app_mention', async ({ event, client, logger }) => {
     }
   } catch (err) {
     logger.error(err);
+    await cleanupProgress();
     const msg = err instanceof Error ? err.message : String(err);
     if (thinkingTs) {
       await client.chat.update({
