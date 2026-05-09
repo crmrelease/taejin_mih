@@ -88,6 +88,13 @@ function runClaude(prompt: string, sessionId?: string): Promise<{ text: string; 
 
 // ───────────────── Work log + git push (worktree to main) ─────────────────
 
+function redactSecrets(s: string): string {
+  return s
+    .replace(/(https?:\/\/)[^@\s/]+:[^@\s/]+@/g, '$1[REDACTED]@')
+    .replace(/gh[pousr]_[A-Za-z0-9]{16,}/g, '[REDACTED]')
+    .replace(/github_pat_[A-Za-z0-9_]{16,}/g, '[REDACTED]');
+}
+
 function execGit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('git', args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
@@ -98,7 +105,11 @@ function execGit(args: string[], cwd: string): Promise<string> {
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code === 0) resolve(stdout);
-      else reject(new Error(`git ${args.slice(0, 4).join(' ')} exited ${code}: ${(stderr || stdout).trim()}`));
+      else {
+        const argsSafe = args.slice(0, 4).map(redactSecrets).join(' ');
+        const outSafe = redactSecrets((stderr || stdout).trim());
+        reject(new Error(`git ${argsSafe} exited ${code}: ${outSafe}`));
+      }
     });
   });
 }
