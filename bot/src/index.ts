@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { App, LogLevel } from '@slack/bolt';
+import { registerSelf, loadRegistry, formatRegistryForPrompt } from './registry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_DIR = path.resolve(__dirname, '../..');
@@ -325,7 +326,9 @@ app.event('app_mention', async ({ event, client, logger }) => {
       const threadCtx = e.thread_ts
         ? await fetchThreadContext(client, channel, threadKey, ts)
         : '';
-      const prompt = threadCtx + `<user_request>\n${userText}\n</user_request>`;
+      const registry = await loadRegistry();
+      const registryCtx = formatRegistryForPrompt(registry, AGENT_NAME);
+      const prompt = registryCtx + threadCtx + `<user_request>\n${userText}\n</user_request>`;
       const { text, sessionId } = await runClaude(prompt, existing);
       answer = text;
       if (sessionId) await saveSession(threadKey, sessionId);
@@ -373,5 +376,17 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
 (async () => {
   await app.start();
+  try {
+    const auth = await app.client.auth.test({ token: SLACK_BOT_TOKEN });
+    const userId = auth.user_id;
+    if (typeof userId === 'string' && userId.length > 0) {
+      await registerSelf(AGENT_NAME, userId);
+      console.log(`registry: ${AGENT_NAME} → ${userId}`);
+    } else {
+      console.warn(`registry: auth.test returned no user_id for ${AGENT_NAME}`);
+    }
+  } catch (err) {
+    console.warn(`registry: failed to register ${AGENT_NAME}: ${(err as Error).message}`);
+  }
   console.log(`⚡ ${AGENT_NAME}-bot is running (Socket Mode)`);
 })();
