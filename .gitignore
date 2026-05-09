@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Per-workspace Claude personality (do NOT share)
+CLAUDE.local.md
+
 # OS
 .DS_Store
 Thumbs.db
