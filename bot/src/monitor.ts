@@ -23,6 +23,8 @@ if (!ALERT_TARGET) { console.error('MONITOR_ALERT_TARGET missing in .env (Slack 
 
 const slack = new WebClient(SLACK_BOT_TOKEN);
 
+type HealthStatus = 'up' | 'down' | 'unknown';
+
 interface Player { id?: string; name?: string; player?: string; createdAt?: number; }
 interface State {
   seenIds: string[];
@@ -32,10 +34,19 @@ interface State {
   consecutiveErrors: number;
   lastError?: string;
   lastPollAt?: number;
+  pageStatus: HealthStatus;
+  binStatus: HealthStatus;
+  pageFailCount: number;
+  binFailCount: number;
+  pageDownSince?: number;
+  binDownSince?: number;
 }
+
+const FAIL_THRESHOLD = 2;
 
 const initialState = (): State => ({
   seenIds: [], bootstrapped: false, pollCount: 0, notifyCount: 0, consecutiveErrors: 0,
+  pageStatus: 'unknown', binStatus: 'unknown', pageFailCount: 0, binFailCount: 0,
 });
 
 async function loadState(): Promise<State> {
@@ -80,6 +91,48 @@ function playerKey(p: Player): string {
   return `${p.name ?? ''}|${p.player ?? ''}|${p.createdAt ?? ''}`;
 }
 
+async function notifyHealth(emoji: string, title: string, detail: string): Promise<void> {
+  try {
+    await slack.chat.postMessage({
+      channel: ALERT_TARGET!,
+      text: [`${emoji} *인프라 — ${title}*`, detail].join('\n'),
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+  } catch (err) {
+    console.warn(`[notify-health-fail] ${(err as Error).message}`);
+  }
+}
+
+async function checkPage(state: State): Promise<void> {
+  let ok = false;
+  let detail = '';
+  try {
+    const res = await fetch(PAGE_URL, { method: 'GET' });
+    ok = res.ok;
+    detail = `HTTP ${res.status} — ${PAGE_URL}`;
+  } catch (err) {
+    detail = `fetch error: ${(err as Error).message.slice(0, 120)} — ${PAGE_URL}`;
+  }
+
+  if (ok) {
+    state.pageFailCount = 0;
+    if (state.pageStatus === 'down') {
+      const mins = state.pageDownSince ? Math.round((Date.now() - state.pageDownSince) / 60_000) : 0;
+      await notifyHealth(':white_check_mark:', '페이지 복구', `다운 ${mins}분 후 복구 — ${PAGE_URL}`);
+      state.pageDownSince = undefined;
+    }
+    state.pageStatus = 'up';
+  } else {
+    state.pageFailCount += 1;
+    if (state.pageFailCount >= FAIL_THRESHOLD && state.pageStatus !== 'down') {
+      state.pageStatus = 'down';
+      state.pageDownSince = Date.now();
+      await notifyHealth(':rotating_light:', '페이지 응답 실패', `${state.pageFailCount}회 연속 — ${detail}`);
+    }
+  }
+}
+
 async function notifyNew(p: Player): Promise<void> {
   const lines = [
     ':soccer: *축구선수 보드 — 새 등록*',
@@ -97,7 +150,30 @@ async function notifyNew(p: Player): Promise<void> {
 }
 
 async function pollOnce(state: State): Promise<State> {
-  const players = await fetchPlayers();
+  await checkPage(state);
+
+  let players: Player[];
+  try {
+    players = await fetchPlayers();
+  } catch (err) {
+    state.binFailCount += 1;
+    if (state.binFailCount >= FAIL_THRESHOLD && state.binStatus !== 'down') {
+      state.binStatus = 'down';
+      state.binDownSince = Date.now();
+      await notifyHealth(':rotating_light:', 'JSONBin 응답 실패', `${state.binFailCount}회 연속 — ${(err as Error).message.slice(0, 120)}`);
+    }
+    await saveState(state);
+    throw err;
+  }
+
+  state.binFailCount = 0;
+  if (state.binStatus === 'down') {
+    const mins = state.binDownSince ? Math.round((Date.now() - state.binDownSince) / 60_000) : 0;
+    await notifyHealth(':white_check_mark:', 'JSONBin 복구', `다운 ${mins}분 후 복구`);
+    state.binDownSince = undefined;
+  }
+  state.binStatus = 'up';
+
   state.pollCount += 1;
   state.consecutiveErrors = 0;
   state.lastPollAt = Date.now();
