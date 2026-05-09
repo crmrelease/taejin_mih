@@ -9,6 +9,9 @@ CLAUDE.local.md
 # Per-instance bot state (Slack thread → Claude session map)
 bot/sessions.json
 
+# JSONBin monitor state (seen ids, poll counters)
+bot/monitor_state.json
+
 # OS
 .DS_Store
 Thumbs.db
