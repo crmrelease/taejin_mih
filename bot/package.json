@@ -1,0 +1,21 @@
+{
+  "name": "som-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Slack bot for the som agent — proxies @som mentions to local Claude Code (Max subscription)",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}
