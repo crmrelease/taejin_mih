@@ -11,6 +11,7 @@ const WORKSPACE_DIR = path.resolve(__dirname, '../..');
 const AGENT_NAME = path.basename(WORKSPACE_DIR).replace(/^agent_/, '');
 const SESSIONS_FILE = path.resolve(__dirname, '../sessions.json');
 const LOGS_WORKTREE = `/tmp/${AGENT_NAME}-logs-wt`;
+let SELF_USER_ID: string | undefined;
 
 dotenv.config({ path: path.resolve(WORKSPACE_DIR, '.env') });
 
@@ -227,6 +228,7 @@ async function fetchThreadContext(
   channel: string,
   threadTs: string,
   currentTs: string,
+  selfUserId?: string,
 ): Promise<string> {
   try {
     const res = await client.conversations.replies({ channel, ts: threadTs, limit: 200 });
@@ -242,13 +244,15 @@ async function fetchThreadContext(
         : (m.user ? `<@${m.user}>` : 'unknown');
       const text = (m.text ?? '').replace(/<@[A-Z0-9]+>\s*/g, '').trim();
       if (!text || text === '_작성 중..._') continue;
-      lines.push(`[${speaker}] ${text}`);
+      const isSelf = !!(selfUserId && m.user === selfUserId);
+      const marker = isSelf ? ' (← 당신의 이전 발언)' : '';
+      lines.push(`[${speaker}]${marker} ${text}`);
     }
     if (lines.length === 0) return '';
 
     return [
       '<thread_history>',
-      '아래는 이 슬랙 스레드의 이전 대화입니다 (시간순). 사용자와 다른 에이전트(솜/랑/모)의 발언이 모두 포함되며, 그들과 자연스럽게 협업하세요.',
+      '아래는 이 슬랙 스레드의 이전 대화입니다 (시간순). 사용자와 다른 에이전트(솜/랑/모)의 발언이 모두 포함되며, 그들과 자연스럽게 협업하세요. `(← 당신의 이전 발언)` 마킹된 줄이 본인의 과거 메시지입니다.',
       '',
       lines.join('\n'),
       '</thread_history>',
@@ -264,6 +268,8 @@ async function fetchThreadContext(
 
 const stripMention = (text: string) => text.replace(/<@[A-Z0-9]+>\s*/g, '').trim();
 
+const COMMAND_LOG_CHANNEL = 'C0B2RLA9BJ9';
+
 app.event('app_mention', async ({ event, client, logger }) => {
   const channel = event.channel;
   const ts = event.ts;
@@ -274,6 +280,8 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
   let thinkingTs: string | undefined;
   let eyesAdded = false;
+  let logPostTs: string | undefined;
+  let logPostEyes = false;
   const progressTickers: Array<{ ts: string }> = [];
   const progressTimers: NodeJS.Timeout[] = [];
   const startedAt = Date.now();
@@ -314,6 +322,31 @@ app.event('app_mention', async ({ event, client, logger }) => {
     await client.reactions.add({ channel, timestamp: ts, name: 'eyes' });
     eyesAdded = true;
 
+    if (channel !== COMMAND_LOG_CHANNEL && userText) {
+      try {
+        const permaRes = await client.chat.getPermalink({ channel, message_ts: ts });
+        const permalink = permaRes.permalink;
+        if (permalink) {
+          const postRes = await client.chat.postMessage({
+            channel: COMMAND_LOG_CHANNEL,
+            text: `<@${userId}> → ${AGENT_NAME}\n${permalink}`,
+            unfurl_links: true,
+          });
+          if (postRes.ts) {
+            logPostTs = postRes.ts;
+            await client.reactions.add({
+              channel: COMMAND_LOG_CHANNEL,
+              timestamp: logPostTs,
+              name: 'eyes',
+            });
+            logPostEyes = true;
+          }
+        }
+      } catch (err) {
+        logger.warn(`command log post failed: ${(err as Error).message}`);
+      }
+    }
+
     const thinking = await client.chat.postMessage({
       channel,
       thread_ts: ts,
@@ -332,11 +365,18 @@ app.event('app_mention', async ({ event, client, logger }) => {
       const sessions = await loadSessions();
       const existing = sessions[threadKey];
       const threadCtx = e.thread_ts
-        ? await fetchThreadContext(client, channel, threadKey, ts)
+        ? await fetchThreadContext(client, channel, threadKey, ts, SELF_USER_ID)
         : '';
       const registry = await loadRegistry();
       const registryCtx = formatRegistryForPrompt(registry, AGENT_NAME);
-      const prompt = registryCtx + threadCtx + `<user_request>\n${userText}\n</user_request>`;
+      const selfCtx = [
+        '<self>',
+        `당신은 ${AGENT_NAME}입니다. 절대 다른 에이전트(솜/랑/모 중 ${AGENT_NAME}이 아닌 이름)로 자신을 지칭하지 마세요.`,
+        '아래 thread_history에서 `(← 당신의 이전 발언)` 마킹이 붙은 줄이 본인이 과거에 한 말입니다. 다른 에이전트의 발언과 헷갈리지 마세요.',
+        '</self>',
+        '',
+      ].join('\n');
+      const prompt = selfCtx + registryCtx + threadCtx + `<user_request>\n${userText}\n</user_request>`;
       const { text, sessionId } = await runClaude(prompt, existing);
       answer = text;
       if (sessionId) await saveSession(threadKey, sessionId);
@@ -354,6 +394,21 @@ app.event('app_mention', async ({ event, client, logger }) => {
       await client.reactions.remove({ channel, timestamp: ts, name: 'eyes' });
     }
     await client.reactions.add({ channel, timestamp: ts, name: 'white_check_mark' });
+
+    if (logPostTs) {
+      if (logPostEyes) {
+        await client.reactions.remove({
+          channel: COMMAND_LOG_CHANNEL,
+          timestamp: logPostTs,
+          name: 'eyes',
+        }).catch(() => {});
+      }
+      await client.reactions.add({
+        channel: COMMAND_LOG_CHANNEL,
+        timestamp: logPostTs,
+        name: 'white_check_mark',
+      }).catch(() => {});
+    }
 
     if (userText) {
       lockedLog(() => writeAndPushLog({
@@ -379,6 +434,20 @@ app.event('app_mention', async ({ event, client, logger }) => {
       await client.reactions.remove({ channel, timestamp: ts, name: 'eyes' }).catch(() => {});
     }
     await client.reactions.add({ channel, timestamp: ts, name: 'x' }).catch(() => {});
+    if (logPostTs) {
+      if (logPostEyes) {
+        await client.reactions.remove({
+          channel: COMMAND_LOG_CHANNEL,
+          timestamp: logPostTs,
+          name: 'eyes',
+        }).catch(() => {});
+      }
+      await client.reactions.add({
+        channel: COMMAND_LOG_CHANNEL,
+        timestamp: logPostTs,
+        name: 'x',
+      }).catch(() => {});
+    }
   }
 });
 
@@ -388,6 +457,7 @@ app.event('app_mention', async ({ event, client, logger }) => {
     const auth = await app.client.auth.test({ token: SLACK_BOT_TOKEN });
     const userId = auth.user_id;
     if (typeof userId === 'string' && userId.length > 0) {
+      SELF_USER_ID = userId;
       await registerSelf(AGENT_NAME, userId);
       console.log(`registry: ${AGENT_NAME} → ${userId}`);
     } else {
