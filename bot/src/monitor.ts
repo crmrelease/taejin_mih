@@ -39,6 +39,16 @@ interface Player {
   createdAt?: number;
 }
 
+interface ClientError {
+  id?: string;
+  message?: string;
+  stack?: string;
+  context?: string;
+  url?: string;
+  ua?: string;
+  ts?: number;
+}
+
 interface Incident {
   category: Category;
   startedAt: number;
@@ -48,9 +58,11 @@ interface Incident {
 
 interface State {
   seenIds: string[];
+  seenErrorIds: string[];
   bootstrapped: boolean;
   pollCount: number;
   notifyCount: number;
+  errorNotifyCount: number;
   consecutiveErrors: number;
   lastError?: string;
   lastPollAt?: number;
@@ -66,7 +78,8 @@ interface State {
 const FAIL_THRESHOLD = 2;
 
 const initialState = (): State => ({
-  seenIds: [], bootstrapped: false, pollCount: 0, notifyCount: 0, consecutiveErrors: 0,
+  seenIds: [], seenErrorIds: [], bootstrapped: false,
+  pollCount: 0, notifyCount: 0, errorNotifyCount: 0, consecutiveErrors: 0,
   pageStatus: 'unknown', binStatus: 'unknown', imgbbStatus: 'unknown',
   pageFailCount: 0, binFailCount: 0, imgbbFailCount: 0,
   incidents: {},
@@ -90,17 +103,33 @@ function fmtKST(epochMs: number): string {
   }).format(new Date(epochMs));
 }
 
+function unwrapRecord(body: unknown): unknown {
+  if (body && typeof body === 'object' && 'record' in (body as Record<string, unknown>)) {
+    return (body as { record: unknown }).record;
+  }
+  return body;
+}
+
 function extractPlayers(body: unknown): Player[] {
-  if (Array.isArray(body)) return body as Player[];
-  if (body && typeof body === 'object') {
-    const o = body as Record<string, unknown>;
+  const inner = unwrapRecord(body);
+  if (Array.isArray(inner)) return inner as Player[];
+  if (inner && typeof inner === 'object') {
+    const o = inner as Record<string, unknown>;
     if (Array.isArray(o.players)) return o.players as Player[];
-    if (o.record !== undefined) return extractPlayers(o.record);
   }
   return [];
 }
 
-async function fetchPlayers(): Promise<Player[]> {
+function extractErrors(body: unknown): ClientError[] {
+  const inner = unwrapRecord(body);
+  if (inner && typeof inner === 'object') {
+    const o = inner as Record<string, unknown>;
+    if (Array.isArray(o.errors)) return o.errors as ClientError[];
+  }
+  return [];
+}
+
+async function fetchBin(): Promise<{ players: Player[]; errors: ClientError[] }> {
   const url = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`;
   const res = await fetch(url, {
     headers: { 'X-Master-Key': JSONBIN_MASTER_KEY!, 'X-Bin-Meta': 'false' },
@@ -109,7 +138,8 @@ async function fetchPlayers(): Promise<Player[]> {
     const body = await res.text().catch(() => '');
     throw new Error(`jsonbin ${res.status}: ${body.slice(0, 200)}`);
   }
-  return extractPlayers(await res.json());
+  const body = await res.json();
+  return { players: extractPlayers(body), errors: extractErrors(body) };
 }
 
 function playerKey(p: Player): string {
@@ -230,6 +260,33 @@ async function checkImgbb(state: State): Promise<void> {
   await trackHealth(state, 'imgbb', ok, detail);
 }
 
+function errorKey(e: ClientError): string {
+  if (e.id) return e.id;
+  return `${e.context ?? ''}|${e.message ?? ''}|${e.ts ?? ''}`;
+}
+
+async function notifyClientError(e: ClientError): Promise<void> {
+  const lines = [
+    `:rotating_light: *클라이언트 에러 발생* (\`${e.context ?? '?'}\`)`,
+    `• 메시지: \`${(e.message ?? '?').slice(0, 300)}\``,
+  ];
+  if (e.url) lines.push(`• URL: ${e.url}`);
+  if (e.ts) lines.push(`• 시각: ${fmtKST(e.ts)} KST`);
+  if (e.ua) lines.push(`• UA: \`${e.ua.slice(0, 120)}\``);
+  if (e.stack) {
+    lines.push('```');
+    lines.push(e.stack.slice(0, 800));
+    lines.push('```');
+  }
+  if (DEV_USER_ID) lines.push(`<@${DEV_USER_ID}> frontend 결함 의심 — 점검 부탁`);
+  await postSafe({
+    channel: errorChannel(),
+    text: lines.join('\n'),
+    unfurl_links: false,
+    unfurl_media: false,
+  });
+}
+
 async function notifyNew(p: Player): Promise<void> {
   const lines = [
     ':soccer: *축구선수 보드 — 새 등록*',
@@ -255,8 +312,9 @@ async function pollOnce(state: State): Promise<State> {
   await checkImgbb(state);
 
   let players: Player[];
+  let errors: ClientError[];
   try {
-    players = await fetchPlayers();
+    ({ players, errors } = await fetchBin());
   } catch (err) {
     await trackHealth(state, 'bin', false, (err as Error).message.slice(0, 200));
     await saveState(state);
@@ -270,34 +328,54 @@ async function pollOnce(state: State): Promise<State> {
 
   if (!state.bootstrapped) {
     state.seenIds = players.map(playerKey);
+    state.seenErrorIds = errors.map(errorKey);
     state.bootstrapped = true;
-    console.log(`[bootstrap] marked ${players.length} existing items as seen`);
+    console.log(`[bootstrap] marked ${players.length} players, ${errors.length} errors as seen`);
     await saveState(state);
     return state;
   }
 
-  const seen = new Set(state.seenIds);
-  const newOnes = players.filter((p) => !seen.has(playerKey(p)));
+  const seenP = new Set(state.seenIds);
+  const newPlayers = players.filter((p) => !seenP.has(playerKey(p)));
+  const seenE = new Set(state.seenErrorIds);
+  const newErrors = errors.filter((e) => !seenE.has(errorKey(e)));
 
-  if (newOnes.length === 0) {
+  if (newPlayers.length === 0 && newErrors.length === 0) {
     if (state.pollCount % 12 === 1) {
-      console.log(`[poll #${state.pollCount}] seen=${state.seenIds.length} no new`);
+      console.log(`[poll #${state.pollCount}] seen=${state.seenIds.length}p/${state.seenErrorIds.length}e no new`);
     }
     await saveState(state);
     return state;
   }
 
-  newOnes.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-  console.log(`[notify] ${newOnes.length} new entries`);
-  for (const p of newOnes) {
-    try {
-      await notifyNew(p);
-      state.seenIds.push(playerKey(p));
-      state.notifyCount += 1;
-    } catch (err) {
-      console.warn(`[notify-fail] ${playerKey(p)}: ${(err as Error).message}`);
+  if (newPlayers.length > 0) {
+    newPlayers.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    console.log(`[notify] ${newPlayers.length} new player entries`);
+    for (const p of newPlayers) {
+      try {
+        await notifyNew(p);
+        state.seenIds.push(playerKey(p));
+        state.notifyCount += 1;
+      } catch (err) {
+        console.warn(`[notify-fail] ${playerKey(p)}: ${(err as Error).message}`);
+      }
     }
   }
+
+  if (newErrors.length > 0) {
+    newErrors.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    console.log(`[notify-err] ${newErrors.length} new client errors`);
+    for (const e of newErrors) {
+      try {
+        await notifyClientError(e);
+        state.seenErrorIds.push(errorKey(e));
+        state.errorNotifyCount += 1;
+      } catch (err) {
+        console.warn(`[notify-err-fail] ${errorKey(e)}: ${(err as Error).message}`);
+      }
+    }
+  }
+
   await saveState(state);
   return state;
 }
