@@ -72,14 +72,9 @@
       padding: 24px;
     }
 
-    .card + .card {
-      margin-top: 20px;
-    }
+    .card + .card { margin-top: 20px; }
 
-    .field {
-      display: block;
-      margin-bottom: 14px;
-    }
+    .field { display: block; margin-bottom: 14px; }
 
     .field label {
       display: block;
@@ -89,7 +84,7 @@
       margin-bottom: 6px;
     }
 
-    .field input {
+    .field input[type="text"] {
       width: 100%;
       height: 46px;
       padding: 0 14px;
@@ -103,11 +98,115 @@
       outline: none;
     }
 
-    .field input::placeholder { color: #9ca3af; }
+    .field input[type="text"]::placeholder { color: #9ca3af; }
 
-    .field input:focus {
+    .field input[type="text"]:focus {
       border-color: var(--green-600);
       box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.12);
+    }
+
+    /* 사진 첨부 영역 */
+    .photo-field {
+      display: flex;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .photo-slot {
+      width: 108px;
+      height: 108px;
+      flex-shrink: 0;
+      position: relative;
+      background: var(--green-50);
+      border: 1.5px dashed var(--green-200);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .photo-slot.has-image {
+      border-style: solid;
+      border-color: var(--green-200);
+      background: #fff;
+    }
+
+    .photo-slot img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .photo-slot .placeholder {
+      text-align: center;
+      color: var(--green-700);
+      font-size: 12px;
+      line-height: 1.4;
+      pointer-events: none;
+      padding: 4px;
+    }
+
+    .photo-slot .placeholder .icon {
+      font-size: 26px;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .photo-actions {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .photo-actions .label-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--green-800);
+    }
+
+    .photo-actions .photo-meta {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+      min-height: 1.4em;
+    }
+
+    .photo-btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button.ghost {
+      appearance: none;
+      cursor: pointer;
+      background: #fff;
+      color: var(--green-800);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      height: 34px;
+      padding: 0 12px;
+      border: 1.5px solid var(--green-200);
+      border-radius: 8px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    button.ghost:hover { background: var(--green-50); border-color: var(--green-500); }
+    button.ghost.danger { color: #b91c1c; border-color: #fecaca; }
+    button.ghost.danger:hover { background: #fef2f2; border-color: #fca5a5; }
+
+    .file-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      overflow: hidden;
+      pointer-events: none;
     }
 
     .form-row {
@@ -159,10 +258,7 @@
       color: var(--green-800);
     }
 
-    .count {
-      font-size: 13px;
-      color: var(--muted);
-    }
+    .count { font-size: 13px; color: var(--muted); }
 
     .list {
       display: flex;
@@ -174,7 +270,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      padding: 14px 16px;
+      padding: 12px 14px;
       background: #fff;
       border: 1px solid var(--green-100);
       border-radius: 10px;
@@ -187,26 +283,59 @@
       border-color: var(--green-200);
     }
 
+    .item .thumb {
+      width: 64px;
+      height: 64px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      overflow: hidden;
+      background: var(--green-50);
+      border: 1.5px solid var(--green-100);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: var(--green-700);
+    }
+
+    .item .thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .item .body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
     .item .who {
       font-weight: 700;
       color: var(--ink);
-      min-width: 80px;
-    }
-
-    .item .sep {
-      color: var(--green-200);
-      font-weight: 700;
+      font-size: 15px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .item .player {
-      flex: 1;
       color: var(--green-800);
+      font-size: 14px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .item .when {
       font-size: 12px;
       color: var(--muted);
       white-space: nowrap;
+      align-self: flex-start;
+      padding-top: 4px;
     }
 
     .empty {
@@ -246,10 +375,12 @@
     @media (max-width: 480px) {
       header.hero h1 { font-size: 26px; }
       .card { padding: 20px; }
+      .photo-field { flex-direction: column; }
+      .photo-slot { width: 100%; height: 160px; }
       .form-row { flex-direction: column; align-items: stretch; }
       .hint { order: 2; text-align: center; }
       button.submit { width: 100%; }
-      .item .who { min-width: 64px; }
+      .item .thumb { width: 56px; height: 56px; }
     }
   </style>
 </head>
@@ -271,6 +402,30 @@
           <label for="player">좋아하는 축구선수</label>
           <input id="player" name="player" type="text" maxlength="30" placeholder="예: 손흥민" required />
         </div>
+
+        <div class="field">
+          <label>선수 사진 <span style="color:var(--muted);font-weight:500;">(선택)</span></label>
+          <div class="photo-field">
+            <label class="photo-slot" id="photo-slot" for="photo-input" title="사진 선택">
+              <input id="photo-input" class="file-input" type="file" accept="image/jpeg,image/png,image/webp" />
+              <span class="placeholder" id="photo-placeholder">
+                <span class="icon">⚽</span>
+                사진 첨부<br />
+                <span style="color:var(--muted);">탭해서 선택</span>
+              </span>
+              <img id="photo-preview" alt="" style="display:none;" />
+            </label>
+            <div class="photo-actions">
+              <span class="label-text">jpg / png / webp · 5MB 이하</span>
+              <span class="photo-meta" id="photo-meta">사진 없이도 등록할 수 있어요.</span>
+              <div class="photo-btn-row">
+                <button type="button" class="ghost" id="photo-pick-btn">사진 선택</button>
+                <button type="button" class="ghost danger" id="photo-clear-btn" style="display:none;">제거</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="form-row">
           <span id="hint" class="hint">이름과 선수 모두 30자 이내로 적어주세요</span>
           <button id="submit-btn" class="submit" type="submit">등록하기</button>
@@ -293,14 +448,21 @@
 
   <script>
     // ---- 설정 (사용자가 채워넣을 영역) ------------------------------
-    // JSONBin.io 셋업 후 두 값을 채워주세요.
-    //  - BIN_ID: jsonbin.io 콘솔 → Bins → 생성한 bin 의 ID (24자리)
-    //  - MASTER_KEY: 우측 상단 프로필 → API Keys → X-MASTER-KEY
+    // JSONBin.io
     const JSONBIN_BIN_ID = "69ff0dbf250b1311c3260b83";
     const JSONBIN_MASTER_KEY = "$2a$10$Zms1Zv3vSzrf1bn80EkVF.L5Fe5leRS6QB/rg.6R7j3qdEkdAj8cG";
+
+    // imgbb (선수 사진 호스팅) — https://api.imgbb.com 에서 발급
+    // 키 미설정 시 사진 첨부는 자동 비활성화되고, 텍스트만 등록 가능
+    const IMGBB_API_KEY = "2a0c8e979640ebf1a9af8844694d892a";
     // ---------------------------------------------------------------
 
     const API_BASE = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+    const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+    const RESIZE_MAX = 800;
+    const RESIZE_QUALITY = 0.82;
+    const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
     const $ = (sel) => document.querySelector(sel);
     const listArea = $("#list-area");
     const countEl = $("#count");
@@ -309,10 +471,22 @@
     const nameInput = $("#name");
     const playerInput = $("#player");
     const submitBtn = $("#submit-btn");
+    const photoInput = $("#photo-input");
+    const photoSlot = $("#photo-slot");
+    const photoPlaceholder = $("#photo-placeholder");
+    const photoPreview = $("#photo-preview");
+    const photoMeta = $("#photo-meta");
+    const photoPickBtn = $("#photo-pick-btn");
+    const photoClearBtn = $("#photo-clear-btn");
 
-    function isConfigured() {
+    let pendingPhotoBlob = null;
+
+    function isJsonbinConfigured() {
       return JSONBIN_BIN_ID && !JSONBIN_BIN_ID.startsWith("__")
         && JSONBIN_MASTER_KEY && !JSONBIN_MASTER_KEY.startsWith("__");
+    }
+    function isImgbbConfigured() {
+      return IMGBB_API_KEY && !IMGBB_API_KEY.startsWith("__");
     }
 
     function escapeHtml(str) {
@@ -336,6 +510,117 @@
       return new Date(ts).toLocaleDateString("ko-KR");
     }
 
+    function initialOf(name) {
+      const t = (name || "").trim();
+      if (!t) return "⚽";
+      // 한글/이모지/영문 모두 첫 글자 1개 (서로게이트 페어 안전)
+      return Array.from(t)[0];
+    }
+
+    // ---------------- 사진 처리 ----------------
+
+    function setPhotoMeta(text, isError) {
+      photoMeta.textContent = text;
+      photoMeta.style.color = isError ? "#b91c1c" : "";
+    }
+
+    function clearPhoto() {
+      pendingPhotoBlob = null;
+      photoInput.value = "";
+      photoPreview.removeAttribute("src");
+      photoPreview.style.display = "none";
+      photoPlaceholder.style.display = "";
+      photoSlot.classList.remove("has-image");
+      photoClearBtn.style.display = "none";
+      setPhotoMeta("사진 없이도 등록할 수 있어요.", false);
+    }
+
+    async function resizeImage(file) {
+      const url = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = () => reject(new Error("이미지를 읽지 못했어요."));
+          im.src = url;
+        });
+        let { naturalWidth: w, naturalHeight: h } = img;
+        if (!w || !h) throw new Error("이미지 크기를 알 수 없어요.");
+        if (w > RESIZE_MAX || h > RESIZE_MAX) {
+          const ratio = Math.min(RESIZE_MAX / w, RESIZE_MAX / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        const blob = await new Promise((resolve, reject) => {
+          canvas.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("리사이징 실패"))),
+            "image/jpeg",
+            RESIZE_QUALITY
+          );
+        });
+        return { blob, width: w, height: h };
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    async function handlePhotoSelected(file) {
+      if (!file) return;
+      if (!ALLOWED_TYPES.has(file.type)) {
+        clearPhoto();
+        setPhotoMeta("jpg / png / webp 형식만 가능해요.", true);
+        return;
+      }
+      if (file.size > MAX_PHOTO_BYTES) {
+        clearPhoto();
+        setPhotoMeta(`5MB 이하만 가능해요. (선택한 파일: ${(file.size / 1024 / 1024).toFixed(1)}MB)`, true);
+        return;
+      }
+
+      setPhotoMeta("미리보기 만드는 중…", false);
+      try {
+        const { blob, width, height } = await resizeImage(file);
+        pendingPhotoBlob = blob;
+        const dataUrl = URL.createObjectURL(blob);
+        photoPreview.src = dataUrl;
+        photoPreview.style.display = "";
+        photoPlaceholder.style.display = "none";
+        photoSlot.classList.add("has-image");
+        photoClearBtn.style.display = "";
+        const kb = (blob.size / 1024).toFixed(0);
+        setPhotoMeta(`준비됨 · ${width}×${height} · 약 ${kb}KB`, false);
+      } catch (e) {
+        clearPhoto();
+        setPhotoMeta(`사진을 처리하지 못했어요. (${e.message})`, true);
+      }
+    }
+
+    async function uploadToImgbb(blob) {
+      if (!isImgbbConfigured()) {
+        throw new Error("imgbb API key가 설정되지 않았어요.");
+      }
+      const fd = new FormData();
+      fd.append("image", blob, "player.jpg");
+      const res = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(IMGBB_API_KEY)}`, {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) throw new Error(`imgbb 업로드 실패 (HTTP ${res.status})`);
+      const data = await res.json();
+      if (!data || !data.success || !data.data || !data.data.url) {
+        const msg = data && data.error && data.error.message ? data.error.message : "응답 형식 오류";
+        throw new Error(`imgbb 업로드 실패: ${msg}`);
+      }
+      return data.data.url;
+    }
+
+    // ---------------- JSONBin ----------------
+
     async function fetchPlayers() {
       const res = await fetch(`${API_BASE}/latest`, {
         method: "GET",
@@ -347,7 +632,6 @@
       });
       if (!res.ok) throw new Error(`GET 실패: ${res.status}`);
       const data = await res.json();
-      // data 가 배열이거나 { players: [...] } 둘 다 허용
       if (Array.isArray(data)) return data;
       if (data && Array.isArray(data.players)) return data.players;
       return [];
@@ -360,10 +644,19 @@
           "Content-Type": "application/json",
           "X-Master-Key": JSONBIN_MASTER_KEY,
         },
-        body: JSON.stringify(arr),
+        body: JSON.stringify({ players: arr }),
       });
       if (!res.ok) throw new Error(`PUT 실패: ${res.status}`);
       return res.json();
+    }
+
+    // ---------------- 렌더 ----------------
+
+    function thumbHtml(it) {
+      if (it.photoUrl) {
+        return `<div class="thumb"><img src="${escapeHtml(it.photoUrl)}" alt="${escapeHtml(it.player)}" loading="lazy" referrerpolicy="no-referrer" /></div>`;
+      }
+      return `<div class="thumb" aria-hidden="true">${escapeHtml(initialOf(it.player))}</div>`;
     }
 
     function renderList(items) {
@@ -377,9 +670,11 @@
       const sorted = [...items].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       listArea.innerHTML = `<div class="list">${sorted.map((it) => `
         <div class="item">
-          <span class="who">${escapeHtml(it.name)}</span>
-          <span class="sep">|</span>
-          <span class="player">${escapeHtml(it.player)}</span>
+          ${thumbHtml(it)}
+          <div class="body">
+            <span class="who">${escapeHtml(it.name)}</span>
+            <span class="player">${escapeHtml(it.player)}</span>
+          </div>
           <span class="when" title="${new Date(it.createdAt || 0).toLocaleString("ko-KR")}">${formatRelative(it.createdAt || 0)}</span>
         </div>
       `).join("")}</div>`;
@@ -409,6 +704,16 @@
       }
     }
 
+    // ---------------- 이벤트 ----------------
+
+    photoInput.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) handlePhotoSelected(file);
+    });
+
+    photoPickBtn.addEventListener("click", () => photoInput.click());
+    photoClearBtn.addEventListener("click", clearPhoto);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const name = nameInput.value.trim();
@@ -426,41 +731,60 @@
       }
 
       hintEl.classList.remove("error");
-      hintEl.textContent = "등록 중…";
       submitBtn.disabled = true;
 
+      let photoUrl = null;
       try {
+        if (pendingPhotoBlob) {
+          if (!isImgbbConfigured()) {
+            throw new Error("사진 호스팅 키가 설정되지 않았어요. 사진을 빼고 등록해주세요.");
+          }
+          hintEl.textContent = "사진 업로드 중…";
+          photoUrl = await uploadToImgbb(pendingPhotoBlob);
+        }
+
+        hintEl.textContent = "등록 중…";
         const current = await fetchPlayers();
-        const next = [
-          ...current,
-          {
-            id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()),
-            name,
-            player,
-            createdAt: Date.now(),
-          },
-        ];
+        const entry = {
+          id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()),
+          name,
+          player,
+          createdAt: Date.now(),
+        };
+        if (photoUrl) entry.photoUrl = photoUrl;
+
+        const next = [...current, entry];
         await savePlayers(next);
 
         nameInput.value = "";
         playerInput.value = "";
+        clearPhoto();
         nameInput.focus();
         hintEl.textContent = "등록 완료! 다른 친구도 적어볼까요?";
         renderList(next);
-      } catch (e) {
-        console.error(e);
-        hintEl.textContent = `등록 실패: ${e.message}`;
+      } catch (err) {
+        console.error(err);
+        hintEl.textContent = `등록 실패: ${err.message}`;
         hintEl.classList.add("error");
       } finally {
         submitBtn.disabled = false;
       }
     });
 
-    // 부팅
-    if (!isConfigured()) {
+    // ---------------- 부팅 ----------------
+
+    if (!isJsonbinConfigured()) {
       showConfigWarning();
     } else {
       refresh();
+    }
+
+    if (!isImgbbConfigured()) {
+      // 사진 영역만 비활성화, 텍스트 등록은 그대로 가능
+      photoPickBtn.disabled = true;
+      photoSlot.style.pointerEvents = "none";
+      photoSlot.style.opacity = "0.6";
+      setPhotoMeta("사진 호스팅 키 미설정 — 텍스트만 등록 가능합니다.", false);
     }
   </script>
 </body>
