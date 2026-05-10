@@ -336,15 +336,23 @@ app.event('app_mention', async ({ event, client, logger }) => {
   const progressTimers: NodeJS.Timeout[] = [];
   const startedAt = Date.now();
 
+  const requestSummary = (() => {
+    const firstLine = userText.split('\n').map((s) => s.trim()).find((s) => s.length > 0) || '';
+    if (!firstLine) return '';
+    return firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
+  })();
+
   const scheduleProgressTick = (delayMs: number) => {
     const timer = setTimeout(async () => {
       try {
         const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-        const activityLine = lastActivity ? `\n> ${lastActivity}` : '';
+        const lines = [`_:hourglass_flowing_sand: 작업 중 (${elapsedSec}초 경과)_`];
+        if (requestSummary) lines.push(`> ${requestSummary}`);
+        if (lastActivity) lines.push(`> :thought_balloon: ${lastActivity}`);
         const res = await client.chat.postMessage({
           channel,
           thread_ts: e.thread_ts || ts,
-          text: `_:hourglass_flowing_sand: 작업 중 (${elapsedSec}초 경과)_${activityLine}`,
+          text: lines.join('\n'),
         });
         if (res.ts) progressTickers.push({ ts: res.ts });
       } catch (err) {

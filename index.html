@@ -2,15 +2,40 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Welcome - Mo</title>
+  <title>Welcome - 랑 (개발자/메이커)</title>
   <style>
-    body { font-family: system-ui, sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #2a2d33; color: #e6e8eb; gap: 1rem; }
+    body {
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 24px;
+      min-height: 100vh;
+      margin: 0;
+      background: #1e293b;
+      color: #f1f5f9;
+      text-align: center;
+      padding: 24px;
+    }
     h1 { font-size: 4rem; margin: 0; }
-    p { margin: 0; opacity: 0.7; font-size: 1rem; letter-spacing: 0.04em; }
+    .links { display: flex; flex-direction: column; gap: 10px; }
+    a {
+      color: #86efac;
+      font-size: 1rem;
+      text-decoration: none;
+      border: 1px solid #334155;
+      padding: 10px 18px;
+      border-radius: 10px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    a:hover { background: #334155; border-color: #86efac; }
   </style>
 </head>
 <body>
-  <h1>Welcome - Mo</h1>
-  <p>watcher · maintenance · monitoring</p>
+  <h1>랑 (개발자/메이커)</h1>
+  <div class="links">
+    <a href="./players.html">⚽ 좋아하는 축구선수 보드 →</a>
+  </div>
 </body>
 </html>
