@@ -14,8 +14,13 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '69ff0dbf250b1311c3260b83';
 const JSONBIN_MASTER_KEY = process.env.JSONBIN_MASTER_KEY;
 const ALERT_TARGET = process.env.MONITOR_ALERT_TARGET;
+const ERROR_CHANNEL = process.env.MONITOR_ERROR_CHANNEL;
+const OWNER_USER_ID = process.env.MONITOR_OWNER_USER_ID;
+const DEV_USER_ID = process.env.MONITOR_DEV_USER_ID;
 const POLL_MS = Number(process.env.MONITOR_INTERVAL_MS) || 300_000;
+const INCIDENT_TIMEOUT_MS = Number(process.env.MONITOR_INCIDENT_TIMEOUT_MS) || 600_000;
 const PAGE_URL = process.env.MONITOR_PAGE_URL || 'https://crmrelease.github.io/taejin_mih/players.html';
+const IMGBB_PROBE_URL = process.env.MONITOR_IMGBB_URL || 'https://api.imgbb.com/1/upload';
 
 if (!SLACK_BOT_TOKEN) { console.error('SLACK_BOT_TOKEN missing in .env'); process.exit(1); }
 if (!JSONBIN_MASTER_KEY) { console.error('JSONBIN_MASTER_KEY missing in .env'); process.exit(1); }
@@ -24,8 +29,23 @@ if (!ALERT_TARGET) { console.error('MONITOR_ALERT_TARGET missing in .env (Slack 
 const slack = new WebClient(SLACK_BOT_TOKEN);
 
 type HealthStatus = 'up' | 'down' | 'unknown';
+type Category = 'page' | 'bin' | 'imgbb';
 
-interface Player { id?: string; name?: string; player?: string; createdAt?: number; }
+interface Player {
+  id?: string;
+  name?: string;
+  player?: string;
+  photoUrl?: string;
+  createdAt?: number;
+}
+
+interface Incident {
+  category: Category;
+  startedAt: number;
+  failureReportedAt?: number;
+  lastError: string;
+}
+
 interface State {
   seenIds: string[];
   bootstrapped: boolean;
@@ -36,22 +56,28 @@ interface State {
   lastPollAt?: number;
   pageStatus: HealthStatus;
   binStatus: HealthStatus;
+  imgbbStatus: HealthStatus;
   pageFailCount: number;
   binFailCount: number;
-  pageDownSince?: number;
-  binDownSince?: number;
+  imgbbFailCount: number;
+  incidents: Record<string, Incident>;
 }
 
 const FAIL_THRESHOLD = 2;
 
 const initialState = (): State => ({
   seenIds: [], bootstrapped: false, pollCount: 0, notifyCount: 0, consecutiveErrors: 0,
-  pageStatus: 'unknown', binStatus: 'unknown', pageFailCount: 0, binFailCount: 0,
+  pageStatus: 'unknown', binStatus: 'unknown', imgbbStatus: 'unknown',
+  pageFailCount: 0, binFailCount: 0, imgbbFailCount: 0,
+  incidents: {},
 });
 
 async function loadState(): Promise<State> {
-  try { return { ...initialState(), ...JSON.parse(await fs.readFile(STATE_FILE, 'utf8')) }; }
-  catch { return initialState(); }
+  try {
+    const merged = { ...initialState(), ...JSON.parse(await fs.readFile(STATE_FILE, 'utf8')) };
+    if (!merged.incidents) merged.incidents = {};
+    return merged;
+  } catch { return initialState(); }
 }
 async function saveState(s: State): Promise<void> {
   await fs.writeFile(STATE_FILE, JSON.stringify(s, null, 2));
@@ -91,16 +117,90 @@ function playerKey(p: Player): string {
   return `${p.name ?? ''}|${p.player ?? ''}|${p.createdAt ?? ''}`;
 }
 
-async function notifyHealth(emoji: string, title: string, detail: string): Promise<void> {
-  try {
-    await slack.chat.postMessage({
-      channel: ALERT_TARGET!,
-      text: [`${emoji} *인프라 — ${title}*`, detail].join('\n'),
-      unfurl_links: false,
-      unfurl_media: false,
-    });
-  } catch (err) {
-    console.warn(`[notify-health-fail] ${(err as Error).message}`);
+const errorChannel = (): string => ERROR_CHANNEL || ALERT_TARGET!;
+
+const categoryLabel: Record<Category, string> = {
+  page: '페이지',
+  bin: 'JSONBin',
+  imgbb: 'imgbb',
+};
+
+async function postSafe(args: Parameters<typeof slack.chat.postMessage>[0]): Promise<void> {
+  try { await slack.chat.postMessage(args); }
+  catch (err) { console.warn(`[slack-post-fail] ${(err as Error).message}`); }
+}
+
+async function notifyIncidentOpened(category: Category, detail: string): Promise<void> {
+  const lines = [
+    `:rotating_light: *인프라 — ${categoryLabel[category]} 응답 실패*`,
+    detail,
+    '_자가 복구 시도 중. 결과는 해결/실패 시 다시 보고합니다._',
+  ];
+  await postSafe({ channel: errorChannel(), text: lines.join('\n'), unfurl_links: false, unfurl_media: false });
+}
+
+async function notifyIncidentRecovered(category: Category, downMs: number): Promise<void> {
+  const mins = Math.max(1, Math.round(downMs / 60_000));
+  const lines = [
+    `:white_check_mark: *인프라 — ${categoryLabel[category]} 자가 복구 완료*`,
+    `다운 ${mins}분 후 회복.`,
+  ];
+  if (OWNER_USER_ID) lines.push(`<@${OWNER_USER_ID}>`);
+  await postSafe({ channel: errorChannel(), text: lines.join('\n'), unfurl_links: false, unfurl_media: false });
+}
+
+async function notifyIncidentFailed(category: Category, elapsedMs: number, lastError: string): Promise<void> {
+  const mins = Math.round(elapsedMs / 60_000);
+  const lines = [
+    `:x: *인프라 — ${categoryLabel[category]} 자가 복구 실패 (${mins}분 경과)*`,
+    `최근 에러: \`${lastError.slice(0, 200)}\``,
+    '자가 시도는 계속합니다. 사람 개입이 필요할 수 있습니다.',
+  ];
+  if (OWNER_USER_ID) lines.push(`<@${OWNER_USER_ID}>`);
+  if (category === 'page' && DEV_USER_ID) lines.push(`<@${DEV_USER_ID}> (frontend 측 점검 부탁)`);
+  await postSafe({ channel: errorChannel(), text: lines.join('\n'), unfurl_links: false, unfurl_media: false });
+}
+
+async function trackHealth(
+  state: State,
+  category: Category,
+  ok: boolean,
+  detail: string,
+): Promise<void> {
+  const failKey = (category + 'FailCount') as 'pageFailCount' | 'binFailCount' | 'imgbbFailCount';
+  const statusKey = (category + 'Status') as 'pageStatus' | 'binStatus' | 'imgbbStatus';
+  const inc = state.incidents[category];
+
+  if (ok) {
+    state[failKey] = 0;
+    if (inc) {
+      const downMs = Date.now() - inc.startedAt;
+      await notifyIncidentRecovered(category, downMs);
+      delete state.incidents[category];
+    }
+    state[statusKey] = 'up';
+    return;
+  }
+
+  state[failKey] += 1;
+  if (state[failKey] < FAIL_THRESHOLD) return;
+  state[statusKey] = 'down';
+
+  if (!inc) {
+    state.incidents[category] = {
+      category,
+      startedAt: Date.now(),
+      lastError: detail,
+    };
+    await notifyIncidentOpened(category, detail);
+    return;
+  }
+
+  inc.lastError = detail;
+  const elapsed = Date.now() - inc.startedAt;
+  if (elapsed >= INCIDENT_TIMEOUT_MS && !inc.failureReportedAt) {
+    inc.failureReportedAt = Date.now();
+    await notifyIncidentFailed(category, elapsed, detail);
   }
 }
 
@@ -108,29 +208,26 @@ async function checkPage(state: State): Promise<void> {
   let ok = false;
   let detail = '';
   try {
-    const res = await fetch(PAGE_URL, { method: 'GET' });
+    const res = await fetch(PAGE_URL);
     ok = res.ok;
     detail = `HTTP ${res.status} — ${PAGE_URL}`;
   } catch (err) {
     detail = `fetch error: ${(err as Error).message.slice(0, 120)} — ${PAGE_URL}`;
   }
+  await trackHealth(state, 'page', ok, detail);
+}
 
-  if (ok) {
-    state.pageFailCount = 0;
-    if (state.pageStatus === 'down') {
-      const mins = state.pageDownSince ? Math.round((Date.now() - state.pageDownSince) / 60_000) : 0;
-      await notifyHealth(':white_check_mark:', '페이지 복구', `다운 ${mins}분 후 복구 — ${PAGE_URL}`);
-      state.pageDownSince = undefined;
-    }
-    state.pageStatus = 'up';
-  } else {
-    state.pageFailCount += 1;
-    if (state.pageFailCount >= FAIL_THRESHOLD && state.pageStatus !== 'down') {
-      state.pageStatus = 'down';
-      state.pageDownSince = Date.now();
-      await notifyHealth(':rotating_light:', '페이지 응답 실패', `${state.pageFailCount}회 연속 — ${detail}`);
-    }
+async function checkImgbb(state: State): Promise<void> {
+  let ok = false;
+  let detail = '';
+  try {
+    const res = await fetch(IMGBB_PROBE_URL, { method: 'HEAD' });
+    ok = res.status < 500;
+    detail = `HTTP ${res.status} — imgbb`;
+  } catch (err) {
+    detail = `fetch error: ${(err as Error).message.slice(0, 120)} — imgbb`;
   }
+  await trackHealth(state, 'imgbb', ok, detail);
 }
 
 async function notifyNew(p: Player): Promise<void> {
@@ -141,38 +238,31 @@ async function notifyNew(p: Player): Promise<void> {
   ];
   if (p.createdAt) lines.push(`• 등록 시각: ${fmtKST(p.createdAt)} KST`);
   lines.push(`<${PAGE_URL}|보드 열기>`);
+  if (p.photoUrl) {
+    lines.push('');
+    lines.push(p.photoUrl);
+  }
   await slack.chat.postMessage({
     channel: ALERT_TARGET!,
     text: lines.join('\n'),
-    unfurl_links: false,
-    unfurl_media: false,
+    unfurl_links: !!p.photoUrl,
+    unfurl_media: !!p.photoUrl,
   });
 }
 
 async function pollOnce(state: State): Promise<State> {
   await checkPage(state);
+  await checkImgbb(state);
 
   let players: Player[];
   try {
     players = await fetchPlayers();
   } catch (err) {
-    state.binFailCount += 1;
-    if (state.binFailCount >= FAIL_THRESHOLD && state.binStatus !== 'down') {
-      state.binStatus = 'down';
-      state.binDownSince = Date.now();
-      await notifyHealth(':rotating_light:', 'JSONBin 응답 실패', `${state.binFailCount}회 연속 — ${(err as Error).message.slice(0, 120)}`);
-    }
+    await trackHealth(state, 'bin', false, (err as Error).message.slice(0, 200));
     await saveState(state);
     throw err;
   }
-
-  state.binFailCount = 0;
-  if (state.binStatus === 'down') {
-    const mins = state.binDownSince ? Math.round((Date.now() - state.binDownSince) / 60_000) : 0;
-    await notifyHealth(':white_check_mark:', 'JSONBin 복구', `다운 ${mins}분 후 복구`);
-    state.binDownSince = undefined;
-  }
-  state.binStatus = 'up';
+  await trackHealth(state, 'bin', true, 'OK');
 
   state.pollCount += 1;
   state.consecutiveErrors = 0;
@@ -218,7 +308,7 @@ process.on('SIGTERM', () => stop('SIGTERM'));
 process.on('SIGINT', () => stop('SIGINT'));
 
 (async () => {
-  console.log(`[start] interval=${POLL_MS}ms bin=${JSONBIN_BIN_ID} target=${ALERT_TARGET}`);
+  console.log(`[start] interval=${POLL_MS}ms bin=${JSONBIN_BIN_ID} target=${ALERT_TARGET} errorCh=${ERROR_CHANNEL ?? '(fallback to target)'}`);
   let state = await loadState();
   while (!stopping) {
     try {
