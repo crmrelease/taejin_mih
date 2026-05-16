@@ -365,6 +365,48 @@
       line-height: 1.55;
     }
 
+    /* 디버그 카드 — 모니터링 테스트용 */
+    .debug-card {
+      background: #fffbeb;
+      border: 1px dashed #facc15;
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-top: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .debug-card .text {
+      flex: 1;
+      font-size: 12.5px;
+      color: #854d0e;
+      line-height: 1.5;
+    }
+    .debug-card .text strong { color: #713f12; }
+    button.debug-btn {
+      appearance: none;
+      cursor: pointer;
+      background: #fde047;
+      color: #713f12;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      height: 38px;
+      padding: 0 14px;
+      border: 1.5px solid #facc15;
+      border-radius: 8px;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    button.debug-btn:hover { background: #facc15; }
+    button.debug-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .debug-card .feedback {
+      font-size: 12px;
+      color: #713f12;
+      min-height: 1.4em;
+      margin-top: 4px;
+    }
+
     .footer {
       text-align: center;
       margin-top: 24px;
@@ -441,6 +483,17 @@
       <div id="list-area">
         <div class="loading">목록을 불러오는 중이에요…</div>
       </div>
+    </section>
+
+    <section class="debug-card" aria-label="디버그 도구">
+      <div style="flex:1;">
+        <div class="text">
+          <strong>🧨 모니터링 테스트</strong> — 일부러 화면 에러를 발생시켜요.<br />
+          누르면 mo-bot이 5분 안에 <code>#error</code> 채널로 알림을 보냅니다.
+        </div>
+        <div class="feedback" id="debug-feedback"></div>
+      </div>
+      <button type="button" id="trigger-error-btn" class="debug-btn">테스트 에러 발생</button>
     </section>
 
     <p class="footer">made by 랑 · agent_rang</p>
@@ -621,7 +674,7 @@
 
     // ---------------- JSONBin ----------------
 
-    async function fetchPlayers() {
+    async function fetchBin() {
       const res = await fetch(`${API_BASE}/latest`, {
         method: "GET",
         headers: {
@@ -632,23 +685,91 @@
       });
       if (!res.ok) throw new Error(`GET 실패: ${res.status}`);
       const data = await res.json();
-      if (Array.isArray(data)) return data;
-      if (data && Array.isArray(data.players)) return data.players;
-      return [];
+      // 두 가지 옛 형태 호환: 순수 배열 vs { players: [...] }
+      if (Array.isArray(data)) return { players: data, errors: [] };
+      return {
+        players: Array.isArray(data && data.players) ? data.players : [],
+        errors: Array.isArray(data && data.errors) ? data.errors : [],
+      };
     }
 
-    async function savePlayers(arr) {
+    async function saveBin(payload) {
       const res = await fetch(API_BASE, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           "X-Master-Key": JSONBIN_MASTER_KEY,
         },
-        body: JSON.stringify({ players: arr }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`PUT 실패: ${res.status}`);
       return res.json();
     }
+
+    async function fetchPlayers() {
+      return (await fetchBin()).players;
+    }
+
+    async function savePlayers(arr) {
+      // errors 필드는 그대로 보존하면서 players 만 교체
+      const current = await fetchBin();
+      return saveBin({ players: arr, errors: current.errors });
+    }
+
+    // ---------------- 전역 에러 캡처 (mo-bot 알림용) ----------------
+
+    const recentErrorKeys = new Set();
+    const ERROR_DEDUP_WINDOW_MS = 30_000;
+    const MAX_ERRORS_KEPT = 50;
+
+    function setDebugFeedback(text, isError) {
+      const el = document.getElementById("debug-feedback");
+      if (!el) return;
+      el.textContent = text;
+      el.style.color = isError ? "#b91c1c" : "";
+    }
+
+    async function reportError(err, context) {
+      try {
+        const message = String((err && err.message) || err || "알 수 없는 에러").slice(0, 500);
+        const dedupKey = (context || "") + "|" + message.slice(0, 200);
+        if (recentErrorKeys.has(dedupKey)) return;  // 같은 에러 30초 내 중복 방지
+        recentErrorKeys.add(dedupKey);
+        setTimeout(() => recentErrorKeys.delete(dedupKey), ERROR_DEDUP_WINDOW_MS);
+
+        if (!isJsonbinConfigured()) return;
+
+        const payload = await fetchBin();
+        const entry = {
+          id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()),
+          message,
+          stack: ((err && err.stack) || "").slice(0, 1500),
+          context: context || "",
+          url: location.href,
+          ua: (navigator.userAgent || "").slice(0, 300),
+          ts: Date.now(),
+        };
+        const nextErrors = [...payload.errors, entry];
+        // 100KB bin 한도 보호: 50건 넘으면 가장 오래된 것부터 자름
+        while (nextErrors.length > MAX_ERRORS_KEPT) nextErrors.shift();
+        await saveBin({ players: payload.players, errors: nextErrors });
+        return entry;
+      } catch (innerErr) {
+        // 에러 보고 자체가 또 실패하면 — 무한루프 방지로 콘솔에만 남기고 조용히 끝
+        console.error("error report failed", innerErr);
+      }
+    }
+
+    window.addEventListener("error", (event) => {
+      const err = event.error || new Error(event.message || "window error");
+      reportError(err, "window.error");
+    });
+
+    window.addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason;
+      const err = reason instanceof Error ? reason : new Error(String(reason || "unhandled rejection"));
+      reportError(err, "unhandledrejection");
+    });
 
     // ---------------- 렌더 ----------------
 
@@ -696,8 +817,8 @@
 
     async function refresh() {
       try {
-        const items = await fetchPlayers();
-        renderList(items);
+        const { players } = await fetchBin();
+        renderList(players);
       } catch (e) {
         console.error(e);
         showError(`목록을 불러오지 못했어요. (${e.message})`);
@@ -713,6 +834,33 @@
 
     photoPickBtn.addEventListener("click", () => photoInput.click());
     photoClearBtn.addEventListener("click", clearPhoto);
+
+    // 디버그 — "테스트 에러 발생" 버튼
+    const triggerErrorBtn = document.getElementById("trigger-error-btn");
+    if (triggerErrorBtn) {
+      triggerErrorBtn.addEventListener("click", async () => {
+        triggerErrorBtn.disabled = true;
+        setDebugFeedback("에러 만드는 중…", false);
+        const ts = new Date().toLocaleString("ko-KR");
+        // 비동기 throw → window 'error' 이벤트가 잡아서 reportError가 자동 발사
+        // 동시에 명시적으로도 reportError 호출해서 즉시 기록 (둘 중 어느 쪽이라도 잡히게)
+        try {
+          await reportError(
+            new Error(`테스트 에러 (디버그 버튼) — ${ts}`),
+            "debug-button"
+          );
+          setDebugFeedback("✅ JSONBin에 기록 완료. 5분 안에 #error 채널에 알림이 도착해요.", false);
+        } catch (e) {
+          setDebugFeedback(`기록 실패: ${e.message}`, true);
+        } finally {
+          // 비동기 throw도 한 번 — window 'error' 핸들러 검증용
+          setTimeout(() => {
+            throw new Error(`테스트 에러 (window.error 경로) — ${ts}`);
+          }, 0);
+          setTimeout(() => { triggerErrorBtn.disabled = false; }, 1500);
+        }
+      });
+    }
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -744,7 +892,7 @@
         }
 
         hintEl.textContent = "등록 중…";
-        const current = await fetchPlayers();
+        const current = await fetchBin();
         const entry = {
           id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now()),
           name,
@@ -753,15 +901,15 @@
         };
         if (photoUrl) entry.photoUrl = photoUrl;
 
-        const next = [...current, entry];
-        await savePlayers(next);
+        const nextPlayers = [...current.players, entry];
+        await saveBin({ players: nextPlayers, errors: current.errors });
 
         nameInput.value = "";
         playerInput.value = "";
         clearPhoto();
         nameInput.focus();
         hintEl.textContent = "등록 완료! 다른 친구도 적어볼까요?";
-        renderList(next);
+        renderList(nextPlayers);
       } catch (err) {
         console.error(err);
         hintEl.textContent = `등록 실패: ${err.message}`;
