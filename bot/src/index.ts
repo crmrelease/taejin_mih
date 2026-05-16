@@ -321,16 +321,21 @@ async function fetchThreadContext(
 
 const stripMention = (text: string) => text.replace(/<@[A-Z0-9]+>\s*/g, '').trim();
 
+const COMMAND_LOG_CHANNEL = 'C0B2RLA9BJ9';
+
 app.event('app_mention', async ({ event, client, logger }) => {
   const channel = event.channel;
   const ts = event.ts;
-  const e = event as unknown as { thread_ts?: string; user?: string; text?: string };
+  const e = event as unknown as { thread_ts?: string; user?: string; text?: string; bot_id?: string; subtype?: string };
   const threadKey = e.thread_ts || ts;
   const userText = stripMention(e.text ?? '');
   const userId = e.user || 'unknown';
+  const isFromBot = Boolean(e.bot_id) || e.subtype === 'bot_message';
 
   let thinkingTs: string | undefined;
   let eyesAdded = false;
+  let logPostTs: string | undefined;
+  let logPostEyes = false;
   let lastActivity = '';
   const progressTickers: Array<{ ts: string }> = [];
   const progressTimers: NodeJS.Timeout[] = [];
@@ -372,6 +377,31 @@ app.event('app_mention', async ({ event, client, logger }) => {
   try {
     await client.reactions.add({ channel, timestamp: ts, name: 'eyes' });
     eyesAdded = true;
+
+    if (channel !== COMMAND_LOG_CHANNEL && userText && !isFromBot) {
+      try {
+        const permaRes = await client.chat.getPermalink({ channel, message_ts: ts });
+        const permalink = permaRes.permalink;
+        if (permalink) {
+          const postRes = await client.chat.postMessage({
+            channel: COMMAND_LOG_CHANNEL,
+            text: `<@${userId}> → ${AGENT_NAME}\n${permalink}`,
+            unfurl_links: true,
+          });
+          if (postRes.ts) {
+            logPostTs = postRes.ts;
+            await client.reactions.add({
+              channel: COMMAND_LOG_CHANNEL,
+              timestamp: logPostTs,
+              name: 'eyes',
+            });
+            logPostEyes = true;
+          }
+        }
+      } catch (err) {
+        logger.warn(`command log post failed: ${(err as Error).message}`);
+      }
+    }
 
     const thinking = await client.chat.postMessage({
       channel,
@@ -416,6 +446,21 @@ app.event('app_mention', async ({ event, client, logger }) => {
     }
     await client.reactions.add({ channel, timestamp: ts, name: 'white_check_mark' });
 
+    if (logPostTs) {
+      if (logPostEyes) {
+        await client.reactions.remove({
+          channel: COMMAND_LOG_CHANNEL,
+          timestamp: logPostTs,
+          name: 'eyes',
+        }).catch(() => {});
+      }
+      await client.reactions.add({
+        channel: COMMAND_LOG_CHANNEL,
+        timestamp: logPostTs,
+        name: 'white_check_mark',
+      }).catch(() => {});
+    }
+
     if (userText) {
       lockedLog(() => writeAndPushLog({
         user: `<@${userId}>`,
@@ -440,6 +485,20 @@ app.event('app_mention', async ({ event, client, logger }) => {
       await client.reactions.remove({ channel, timestamp: ts, name: 'eyes' }).catch(() => {});
     }
     await client.reactions.add({ channel, timestamp: ts, name: 'x' }).catch(() => {});
+    if (logPostTs) {
+      if (logPostEyes) {
+        await client.reactions.remove({
+          channel: COMMAND_LOG_CHANNEL,
+          timestamp: logPostTs,
+          name: 'eyes',
+        }).catch(() => {});
+      }
+      await client.reactions.add({
+        channel: COMMAND_LOG_CHANNEL,
+        timestamp: logPostTs,
+        name: 'x',
+      }).catch(() => {});
+    }
   }
 });
 
